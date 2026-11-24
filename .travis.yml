@@ -1,3 +1,17 @@
 language: node_js
 node_js:
 - '0.10'
+dist: focal
+addons:
+  chrome: stable
+  apt:
+    packages:
+    - php-cli
+before_script:
+- PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8000 -t "$TRAVIS_BUILD_DIR" > /tmp/php-server.log 2>&1 &
+script:
+- ./node_modules/.bin/grunt 'build:*:*' uglify 'dist:*'
+- nvm install 20
+- npm install --prefix /tmp/seal-qunit --registry=https://registry.npmjs.org/ puppeteer-core@22.15.0
+- export CHROME_BIN="$(command -v google-chrome-stable)"
+- NODE_PATH=/tmp/seal-qunit/node_modules node test/seal-qunit-runner.js "http://127.0.0.1:8000/test/index.html"

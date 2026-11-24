@@ -1,0 +1,50 @@
+name: seal-build
+on:
+  workflow_dispatch: {}
+env:
+  NPM_CONFIG_REGISTRY: https://:2014-05-01T18%3A05%3A32.863000Z@time-machines-npm.sealsecurity.io/
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '0.10'
+      - run: sudo apt-get update && sudo apt-get install -y faketime
+      - run: npm install
+      # The `build` script's grunt default task minus its jsonlint/jshint/jscs/compare_size gates;
+      # the clock is set to the release build time so the @DATE header and min banner year reproduce.
+      - run: TZ=UTC faketime -f '@2014-05-01 17:42:00' ./node_modules/.bin/grunt 'build:*:*' uglify 'dist:*'
+      # dist/cdn copies, as build/release.js makeReleaseCopies() writes them at release time.
+      - name: Make dist/cdn release copies
+        run: |
+          node -e '
+          var fs = require("fs"), v = require("./package.json").version;
+          var files = { "jquery-VER.js": "dist/jquery.js", "jquery-VER.min.js": "dist/jquery.min.js",
+            "jquery-VER.min.map": "dist/jquery.min.map", "jquery.js": "dist/jquery.js",
+            "jquery.min.js": "dist/jquery.min.js", "jquery.min.map": "dist/jquery.min.map",
+            "jquery-latest.js": "dist/jquery.js", "jquery-latest.min.js": "dist/jquery.min.js",
+            "jquery-latest.min.map": "dist/jquery.min.map" };
+          if (!fs.existsSync("dist/cdn")) { fs.mkdirSync("dist/cdn"); }
+          Object.keys(files).forEach(function (key) {
+            var built = files[key], name = key.replace(/VER/g, v), out = "dist/cdn/" + name,
+              text = fs.readFileSync(built, "utf8");
+            if (/\.map$/.test(out)) {
+              text = text.replace(/"file":"([^"]+)","sources":\["([^"]+)"\]/,
+                "\"file\":\"" + name.replace(/\.min\.map/, ".min.js") +
+                "\",\"sources\":[\"" + name.replace(/\.min\.map/, ".js") + "\"]");
+            } else if (/\.min\.js$/.test(out)) {
+              text = text.replace(/\/\/# sourceMappingURL=\S+/, "");
+            }
+            fs.writeFileSync(out, text);
+          });'
+      # This workflow file is ours, not upstream's: keep it out of the packed tarball.
+      - run: rm -rf .github
+      - run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jquery-npm-tarball
+          path: jquery-*.tgz
+          if-no-files-found: error
