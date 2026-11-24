@@ -2504,3 +2504,135 @@ asyncTest( "Sanitized HTML doesn't get unsanitized (CVE-2020-11022)", function()
 		start();
 	}, 1000 );
 });
+
+test( "<option> markup isn't parsed inside a <select> wrapper (CVE-2020-11023)", function() {
+
+	var div = document.createElement( "div" ),
+		proto = window.HTMLDivElement && window.HTMLDivElement.prototype,
+		descriptor = proto && Object.getOwnPropertyDescriptor && window.Element &&
+			Object.getOwnPropertyDescriptor( window.Element.prototype, "innerHTML" ),
+
+		// Inert markup whose <img> only becomes live if "</select>" can close a wrapper
+		inputs = [
+			"<option><style></option></select><img alt='x'></style>",
+			"<optgroup><style></optgroup></select><img alt='x'></style>"
+		],
+		methods = {
+			"html": function( html ) {
+				jQuery( "<div></div>" ).html( html );
+			},
+			"append": function( html ) {
+				jQuery( "<div></div>" ).append( html );
+			},
+			"jQuery": function( html ) {
+				jQuery( html );
+			}
+		};
+
+	expect( inputs.length * 3 );
+
+	// Support: IE <=9 only
+	// Only browsers that can't parse <option> outside of a <select> need the wrapper
+	div.innerHTML = "<option></option>";
+
+	if ( !div.lastChild || !descriptor || !descriptor.set || !descriptor.configurable ) {
+		jQuery.each( methods, function( name ) {
+			jQuery.each( inputs, function( i, input ) {
+				ok( true, "Wrapper not observable in this browser, " + name + ": " + input );
+			});
+		});
+		return;
+	}
+
+	jQuery.each( methods, function( name, method ) {
+		jQuery.each( inputs, function( i, input ) {
+			var parsed = [];
+
+			// Record every string handed to the HTML parser through a div
+			Object.defineProperty( proto, "innerHTML", {
+				configurable: true,
+				get: descriptor.get,
+				set: function( value ) {
+					parsed.push( value );
+					descriptor.set.call( this, value );
+				}
+			});
+
+			try {
+				method( input );
+			} finally {
+				delete proto.innerHTML;
+			}
+
+			ok( parsed.length > 0 && !jQuery.grep( parsed, function( html ) {
+					return /^\s*<select/i.test( html );
+				}).length,
+				"Markup parsed without a <select> wrapper, " + name + ": " + parsed.join( " | " ) );
+		});
+	});
+});
+
+asyncTest( "Sanitized HTML with <option> doesn't get unsanitized (CVE-2020-11023)", function() {
+
+	var container,
+		counter = 0,
+		executed = {},
+		labels = [],
+
+		// Each input is already-sanitized markup: parsed as-is, every <img> is inert text
+		// inside a raw text element (<style>, <iframe>, ...). It only becomes live if the
+		// markup gets parsed inside a <select> wrapper, which ignores those start tags
+		// and lets "</select>" break out of the wrapper.
+		inputs = [
+			"<option><style></option></select><img src=url404 onerror=xss(%)></style>",
+			"<option><iframe></select><img src=url404 onerror=xss(%)></iframe>",
+			"<option><xmp></option></select><img src=url404 onerror=xss(%)></xmp>",
+			"<option><noembed></option></select><img src=url404 onerror=xss(%)></noembed>",
+			"<option><noframes></option></select><img src=url404 onerror=xss(%)></noframes>",
+			"<option><noscript></option></select><img src=url404 onerror=xss(%)></noscript>",
+			"<option><title></option></select><img src=url404 onerror=xss(%)></title>",
+			"<optgroup><style></optgroup></select><img src=url404 onerror=xss(%)></style>",
+			"<optgroup><option><iframe></select><img src=url404 onerror=xss(%)></iframe>"
+		],
+
+		// .html() (innerHTML shortcut and append fallback), buildFragment and $(html)
+		methods = {
+			"html": function( html ) {
+				jQuery( "<div></div>" ).appendTo( container ).html( html );
+			},
+			"append": function( html ) {
+				jQuery( "<div></div>" ).appendTo( container ).append( html );
+			},
+			"jQuery": function( html ) {
+				jQuery( html ).appendTo( jQuery( "<div></div>" ).appendTo( container ) );
+			}
+		};
+
+	expect( inputs.length * 3 );
+
+	Globals.register( "xss" );
+	window.xss = function( index ) {
+		executed[ index ] = true;
+	};
+
+	container = jQuery( "<div></div>" ).appendTo( "#qunit-fixture" );
+
+	jQuery.each( methods, function( name, method ) {
+		jQuery.each( inputs, function( i, input ) {
+			var index = counter++,
+				html = input.replace( "%", index );
+
+			labels[ index ] = name + ": " + html;
+			method( html );
+		});
+	});
+
+	setTimeout(function() {
+		var i;
+
+		for ( i = 0; i < counter; i++ ) {
+			ok( !executed[ i ], "Insecure code wasn't executed, " + labels[ i ] );
+		}
+		start();
+	}, 1000 );
+});
